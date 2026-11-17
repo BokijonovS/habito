@@ -91,7 +91,7 @@ Switching to PostgreSQL is only `DATABASE_URL` plus `python manage.py migrate`.
 config/          settings, URL root, error format (exceptions.py), throttle base, test helpers
 accounts/        Parent (custom user, email login), ParentDevice; register/login/refresh/logout/account, /me, /devices
 rooms/           Room, Child; room CRUD, room codes, /join, the child token authentication class
-tasks/           Task, Completion; occurrence calculation (occurrences.py), tasks, today, done/undo, completed, history
+tasks/           Task, Completion; occurrence calculation (occurrences.py), tasks, today, done, completed, history
 notifications/   push backends (memory, console, apns) and the "task done" message
 ```
 
@@ -131,6 +131,8 @@ Things the spec left open or that had to change. Each is small; say the word and
 19. **Join rate limit is per IP** as the spec says. Behind a reverse proxy that sets `X-Forwarded-For`, set `NUM_PROXIES` in `REST_FRAMEWORK` (see DRF throttling docs) or the limit will count the proxy's address.
 20. **Throttle rates** in DRF only understand `5/m`; the project adds a small base class so `.env` can say `5/15m` as the spec does.
 21. **HTTPS-only** (`SECURE_SSL_REDIRECT`) is on whenever `DEBUG=false`; the proxy that terminates TLS must send `X-Forwarded-Proto: https`.
-22. **Spec open questions** were taken as: one child per room, no parent undo, one notification per hourly completion, no game state on the server, hourly window optional.
+22. **Spec open questions** were taken as: one child per room, one notification per hourly completion, no game state on the server, hourly window optional, and no undo (see 23).
+
+23. **No undo.** The spec originally let the child undo a done mark until the occurrence's period ended. That endpoint was removed on 2026-11-17: a done mark is final, for the child and the parent, so the app's progress never has to roll back. SPEC.md was updated to match.
 
 Not implemented, as the spec lists them out of scope: SMS code words, multiple parents or children per room, server-side game state, password reset by email.

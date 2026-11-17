@@ -192,10 +192,12 @@ class HistoryView(APIView):
         return Response(HistorySerializer({"from_date": from_day, "to_date": to_day, "occurrences": occurrences}).data)
 
 
-# --- done / undo ------------------------------------------------------------
+# --- done -------------------------------------------------------------------
 
 
 class TaskDoneView(APIView):
+    """A done mark is final: there is no undo in v1."""
+
     permission_classes = [IsChild]
 
     @extend_schema(request=None, responses={201: DoneResponseSerializer}, tags=["tasks"])
@@ -229,16 +231,3 @@ class TaskDoneView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
-
-    @extend_schema(responses={204: None}, tags=["tasks"])
-    def delete(self, request, task_id):
-        task = _task_for(request.user, task_id)
-        at = now()
-        occ = current_occurrence(task, at, task.room.tzinfo)
-        if occ is not None:
-            deleted, _ = Completion.objects.filter(task=task, period_start=occ.period_start).delete()
-            if deleted:
-                return Response(status=status.HTTP_204_NO_CONTENT)
-        if Completion.objects.filter(task=task).exists():
-            raise Conflict("period_ended", "That task's period has ended; it can no longer be undone.")
-        raise Conflict("not_done", "This task is not marked done.")

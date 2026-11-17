@@ -43,7 +43,7 @@ The parent manages the room and its tasks; the child can only read their room an
 | Join a room with a code | No | No | Yes (becomes the child) |
 | Create, edit, delete tasks | Own rooms | No | No |
 | View tasks and today's list | Own rooms | Own room | No |
-| Mark a task done, undo it before its period ends | No | Own room | No |
+| Mark a task done | No | Own room | No |
 | View completed tasks by day | Own rooms | Own room | No |
 | Receive a notification when a task is done | Own rooms | No | No |
 | Delete account and all its data | Yes | No | No |
@@ -115,7 +115,7 @@ One row per parent phone that allowed notifications.
 
 ### Completion
 
-One row per task occurrence the child marks done; undoing deletes the row. An occurrence with no row is open until its period ends, then missed.
+One row per task occurrence the child marks done; a mark is final and is never removed. An occurrence with no row is open until its period ends, then missed.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -133,17 +133,17 @@ A task occurrence is done as soon as the child marks it: that moment sends the p
 
 &#91;embedded content: task occurrence states · 3 states and the parent notification\]
 
-The child can undo a done mark until the occurrence's period ends. An occurrence not marked before its period ends becomes missed.
+A done mark is final; there is no undo in v1, for the child or the parent. An occurrence not marked before its period ends becomes missed.
 
 Occurrences are computed from the task's repeat setting and the room's timezone, so the server does not pre-create rows; a Completion row appears only when the child marks a task done.
 
-Marking done writes one Completion row. Because task and period together are unique, the same occurrence cannot be marked twice; undoing deletes the row.
+Marking done writes one Completion row. Because task and period together are unique, the same occurrence cannot be marked twice.
 
 The notification is sent to each of the parent's registered phones after that transaction commits, and says which child finished which task. If sending fails, the task stays done and still appears in the parent's completed list.
 
 ## API endpoints
 
-25 REST endpoints under `/api/v1`, grouped by what they act on. Every call except sign-up, login and join needs a token in the `Authorization: Bearer` header.
+24 REST endpoints under `/api/v1`, grouped by what they act on. Every call except sign-up, login and join needs a token in the `Authorization: Bearer` header.
 
 ### Auth, account and devices
 
@@ -183,7 +183,6 @@ The notification is sent to each of the parent's registered phones after that tr
 | GET | /rooms/{room\_id}/completed?from=&to= | Parent, child | Completed tasks grouped by day, newest day first, paged by day |
 | GET | /rooms/{room\_id}/history?from=&to= | Parent, child | Every past occurrence, missed ones included; the app builds the caterpillar from this |
 | POST | /tasks/{task\_id}/done | Child | Marks the current occurrence done and notifies the parent |
-| DELETE | /tasks/{task\_id}/done | Child | Undoes it before its period ends |
 
 ### Example: a child joins a room
 
@@ -214,7 +213,7 @@ GET /api/v1/rooms/6f1c…/completed?from=2026-11-16&to=2026-11-17
 
 ### Errors
 
-Errors return `{ "error": { "code": "invalid_code", "message": "…" } }` with one of these statuses: 400 invalid input, 401 missing or expired token, 404 not found or not yours, 409 conflict (already done, period already ended, code already used), 429 too many attempts.
+Errors return `{ "error": { "code": "invalid_code", "message": "…" } }` with one of these statuses: 400 invalid input, 401 missing or expired token, 404 not found or not yours, 409 conflict (already done, task not open right now, code already used), 429 too many attempts.
 
 ## Security, privacy and other requirements
 
@@ -266,7 +265,7 @@ These are left out to keep the first server small; each can be added without cha
 The spec assumes an answer to each of these; the team should confirm or change them before building.
 
 - [ ] One child per room (assumed), or one family room with several children?
-- [ ] Can the parent undo a done mark if the task was not really done?
+- [x] Can the parent undo a done mark if the task was not really done? No: a done mark is final in v1 (decided 2026-11-17).
 - [ ] For hourly tasks, one notification each time, or a summary so the parent is not flooded?
 - [ ] Should the caterpillar and garden state live on the server, so a new phone keeps it and the parent can see it?
 - [ ] What is a typical hourly task, and does it need a time window?

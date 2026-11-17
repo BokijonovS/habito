@@ -127,15 +127,13 @@ class PermissionMatrixTests(HabitoTestCase):
             self.check("parent", "get", reverse(name, args=[self.other_room.id]), 404)
             self.check("child", "get", reverse(name, args=[self.other_room.id]), 404)
 
-    def test_mark_done_and_undo(self):
+    def test_mark_done(self):
         url = reverse("task-done", args=[self.task.id])
         self.check("parent", "post", url, 403)
         self.check("anon", "post", url, 401)
         self.check("child", "post", reverse("task-done", args=[self.other_task.id]), 404)
         self.check("child", "post", url, "ok")
-        self.check("parent", "delete", url, 403)
-        self.check("child", "delete", reverse("task-done", args=[self.other_task.id]), 404)
-        self.check("child", "delete", url, "ok")
+        self.check("child", "delete", url, 405)  # no undo in v1
 
     def test_completed_and_history(self):
         for name in ("room-completed", "room-history"):

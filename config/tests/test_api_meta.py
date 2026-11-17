@@ -75,9 +75,8 @@ class OpenApiTests(HabitoTestCase):
             ("get", "/api/v1/rooms/{room_id}/completed"),
             ("get", "/api/v1/rooms/{room_id}/history"),
             ("post", "/api/v1/tasks/{task_id}/done"),
-            ("delete", "/api/v1/tasks/{task_id}/done"),
         }
-        self.assertEqual(len(expected), 25)
+        self.assertEqual(len(expected), 24)
         for method, path in expected:
             self.assertIn(path, paths, path)
             self.assertIn(method, paths[path], f"{method} {path}")

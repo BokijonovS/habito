@@ -36,10 +36,6 @@ class DoneTests(HabitoTestCase):
         with frozen_now(at), self.captureOnCommitCallbacks(execute=True):
             return self.child.post(reverse("task-done", args=[task.id]))
 
-    def undo(self, task, at):
-        with frozen_now(at):
-            return self.child.delete(reverse("task-done", args=[task.id]))
-
     def test_daily_done_just_before_local_midnight(self):
         response = self.done(self.daily, utc(2026, 11, 16, 18, 59))  # 23:59 Nov 16 local
         self.assertEqual(response.status_code, 201, response.content)
@@ -85,28 +81,12 @@ class DoneTests(HabitoTestCase):
         self.daily.save()
         self.assertError(self.done(self.daily, utc(2026, 11, 16, 10)), 409, "task_paused")
 
-    def test_undo_within_period(self):
+    def test_done_cannot_be_undone(self):
         self.done(self.daily, utc(2026, 11, 16, 10))
-        response = self.undo(self.daily, utc(2026, 11, 16, 12))
-        self.assertEqual(response.status_code, 204)
-        self.assertEqual(Completion.objects.count(), 0)
-        # Can be marked again.
-        self.assertEqual(self.done(self.daily, utc(2026, 11, 16, 13)).status_code, 201)
-
-    def test_undo_after_period_ended(self):
-        self.done(self.daily, utc(2026, 11, 16, 18, 59))
-        response = self.undo(self.daily, utc(2026, 11, 16, 19, 0))
-        self.assertError(response, 409, "period_ended")
+        with frozen_now(utc(2026, 11, 16, 11)):
+            response = self.child.delete(reverse("task-done", args=[self.daily.id]))
+        self.assertError(response, 405, "method_not_allowed")
         self.assertEqual(Completion.objects.count(), 1)
-
-    def test_undo_hourly_after_hour_ended(self):
-        self.done(self.hourly, utc(2026, 11, 16, 4, 5))
-        self.assertEqual(self.undo(self.hourly, utc(2026, 11, 16, 4, 30)).status_code, 204)
-        self.done(self.hourly, utc(2026, 11, 16, 4, 40))
-        self.assertError(self.undo(self.hourly, utc(2026, 11, 16, 5, 0)), 409, "period_ended")
-
-    def test_undo_when_not_done(self):
-        self.assertError(self.undo(self.daily, utc(2026, 11, 16, 10)), 409, "not_done")
 
     def test_parent_cannot_mark_done(self):
         with frozen_now(utc(2026, 11, 16, 10)):

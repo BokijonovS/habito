@@ -37,7 +37,7 @@ class Task(models.Model):
 
 class Completion(models.Model):
     """
-    One row per task occurrence the child marked done. Undo deletes the row.
+    One row per task occurrence the child marked done. A mark is final.
     Survives the task being renamed or deleted, so the completed list stays
     readable.
     """

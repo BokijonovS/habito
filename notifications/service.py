@@ -19,7 +19,7 @@ def notify_task_done(completion_id, child_name: str) -> None:
     """
     Sends one push per registered phone of the room's parent. The message
     carries only the child's name and the task title. Failures are logged
-    and never undo the completion.
+    and never remove the completion.
     """
     completion = Completion.objects.select_related("room").filter(pk=completion_id).first()
     if completion is None:
