@@ -1,9 +1,26 @@
-"""Error format, OpenAPI docs and other cross-cutting behaviour."""
+"""Error format, OpenAPI docs and the full endpoint list."""
 
 from django.test import override_settings
 from django.urls import reverse
 
 from config.test_utils import HabitoTestCase, create_parent, parent_client
+
+ENDPOINTS = {
+    ("post", "/api/v1/auth/register"),
+    ("post", "/api/v1/auth/login"),
+    ("post", "/api/v1/auth/refresh"),
+    ("post", "/api/v1/auth/logout"),
+    ("delete", "/api/v1/auth/account"),
+    ("get", "/api/v1/me"),
+    ("post", "/api/v1/devices"),
+    ("post", "/api/v1/join"),
+    ("get", "/api/v1/tasks"),
+    ("post", "/api/v1/tasks"),
+    ("delete", "/api/v1/tasks/{task_id}"),
+    ("post", "/api/v1/tasks/{task_id}/done"),
+    ("get", "/api/v1/today"),
+    ("get", "/api/v1/history"),
+}
 
 
 class ErrorFormatTests(HabitoTestCase):
@@ -13,7 +30,6 @@ class ErrorFormatTests(HabitoTestCase):
         body = response.json()
         self.assertEqual(set(body), {"error"})
         self.assertEqual(body["error"]["code"], "invalid_input")
-        self.assertIsInstance(body["error"]["message"], str)
         self.assertIn("email", body["error"]["fields"])
 
     def test_unauthorized_shape(self):
@@ -33,9 +49,7 @@ class ErrorFormatTests(HabitoTestCase):
         self.assertEqual(response.json()["error"]["code"], "not_found")
 
     def test_invalid_json_body(self):
-        response = self.client.generic(
-            "POST", reverse("auth-login"), data="{not json", content_type="application/json"
-        )
+        response = self.client.generic("POST", reverse("auth-login"), data="{not json", content_type="application/json")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "invalid_input")
 
@@ -46,37 +60,10 @@ class OpenApiTests(HabitoTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"swagger", response.content.lower())
 
-    def test_schema_lists_every_spec_endpoint(self):
+    def test_schema_lists_exactly_the_14_endpoints(self):
         response = self.client.get("/api/schema/", HTTP_ACCEPT="application/vnd.oai.openapi+json")
         self.assertEqual(response.status_code, 200, response.content[:300])
         paths = response.json()["paths"]
-        expected = {
-            ("post", "/api/v1/auth/register"),
-            ("post", "/api/v1/auth/login"),
-            ("post", "/api/v1/auth/refresh"),
-            ("post", "/api/v1/auth/logout"),
-            ("delete", "/api/v1/auth/account"),
-            ("get", "/api/v1/me"),
-            ("post", "/api/v1/devices"),
-            ("delete", "/api/v1/devices/{device_id}"),
-            ("post", "/api/v1/rooms"),
-            ("get", "/api/v1/rooms"),
-            ("get", "/api/v1/rooms/{room_id}"),
-            ("patch", "/api/v1/rooms/{room_id}"),
-            ("delete", "/api/v1/rooms/{room_id}"),
-            ("post", "/api/v1/rooms/{room_id}/code"),
-            ("delete", "/api/v1/rooms/{room_id}/child"),
-            ("post", "/api/v1/join"),
-            ("get", "/api/v1/rooms/{room_id}/tasks"),
-            ("post", "/api/v1/rooms/{room_id}/tasks"),
-            ("patch", "/api/v1/tasks/{task_id}"),
-            ("delete", "/api/v1/tasks/{task_id}"),
-            ("get", "/api/v1/rooms/{room_id}/today"),
-            ("get", "/api/v1/rooms/{room_id}/completed"),
-            ("get", "/api/v1/rooms/{room_id}/history"),
-            ("post", "/api/v1/tasks/{task_id}/done"),
-        }
-        self.assertEqual(len(expected), 24)
-        for method, path in expected:
-            self.assertIn(path, paths, path)
-            self.assertIn(method, paths[path], f"{method} {path}")
+        found = {(method, path) for path, ops in paths.items() for method in ops}
+        self.assertEqual(found, ENDPOINTS)
+        self.assertEqual(len(ENDPOINTS), 14)

@@ -11,3 +11,12 @@ class LoginThrottle(WindowRateThrottle):
         if not email or not isinstance(email, str):
             return None
         return self.cache_format % {"scope": self.scope, "ident": email.strip().lower()}
+
+
+class JoinThrottle(WindowRateThrottle):
+    """10 join attempts per IP address per 15 minutes (rate set in settings)."""
+
+    scope = "join"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}

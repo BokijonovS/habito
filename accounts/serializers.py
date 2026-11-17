@@ -3,13 +3,13 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Parent, ParentDevice
+from .models import Child, Parent, ParentDevice, validate_timezone
 
 
 class ParentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Parent
-        fields = ["id", "email", "display_name", "created_at"]
+        fields = ["id", "email", "room_code", "timezone", "created_at"]
         read_only_fields = fields
 
 
@@ -34,7 +34,8 @@ def issue_tokens(parent: Parent) -> dict:
 class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
     password = serializers.CharField(write_only=True, min_length=8, max_length=128)
-    display_name = serializers.CharField(max_length=50)
+    # Sent silently by the app (TimeZone.current.identifier); decides when a day starts.
+    timezone = serializers.CharField(max_length=64, required=False, validators=[validate_timezone])
 
     def validate_email(self, value: str) -> str:
         value = value.strip().lower()
@@ -53,6 +54,7 @@ class RegisterSerializer(serializers.Serializer):
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
     password = serializers.CharField(write_only=True, max_length=128)
+    timezone = serializers.CharField(max_length=64, required=False, validators=[validate_timezone])
 
     def validate(self, attrs: dict) -> dict:
         email = attrs["email"].strip().lower()
@@ -72,13 +74,21 @@ class LogoutSerializer(serializers.Serializer):
     apns_token = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+class ChildSerializer(serializers.ModelSerializer):
+    timezone = serializers.CharField(source="parent.timezone", read_only=True)
+
+    class Meta:
+        model = Child
+        fields = ["id", "timezone", "joined_at"]
+        read_only_fields = fields
+
+
 class MeResponseSerializer(serializers.Serializer):
-    """`parent` is set for a parent token, `child` and `room` for a child token."""
+    """`parent` is set for a parent token, `child` for a child token."""
 
     role = serializers.ChoiceField(choices=["parent", "child"])
     parent = ParentSerializer(required=False)
-    child = serializers.DictField(required=False)
-    room = serializers.DictField(required=False)
+    child = ChildSerializer(required=False)
 
 
 class ParentDeviceSerializer(serializers.ModelSerializer):
@@ -90,3 +100,15 @@ class ParentDeviceSerializer(serializers.ModelSerializer):
         model = ParentDevice
         fields = ["id", "apns_token", "created_at", "last_used_at"]
         read_only_fields = ["id", "created_at", "last_used_at"]
+
+
+class JoinSerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=16)
+
+    def validate_code(self, value: str) -> str:
+        return value.strip().upper().replace(" ", "").replace("-", "")
+
+
+class JoinResponseSerializer(serializers.Serializer):
+    child_token = serializers.CharField()
+    child = ChildSerializer()

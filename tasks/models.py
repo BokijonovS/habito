@@ -1,32 +1,26 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
-
-from rooms.models import Room
 
 
 class Repeat(models.TextChoices):
     ONCE = "once", "Once"
     DAILY = "daily", "Daily"
-    HOURLY = "hourly", "Hourly"
 
 
 class Task(models.Model):
+    """
+    A task the parent set. A daily task is due every day from the day it was
+    created; a one-time task is due on its due_date only.
+    """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="tasks")
+    parent = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tasks")
     title = models.CharField(max_length=80)
-    description = models.CharField(max_length=500, blank=True, default="")
     repeat = models.CharField(max_length=10, choices=Repeat.choices)
-    # once: the day it is due (defaults to the day it was created, room time)
-    due_date = models.DateField(null=True, blank=True)
-    # daily: the target time within the day, informational
-    due_time = models.TimeField(null=True, blank=True)
-    # hourly: occurrences from window_start up to (not including) window_end
-    window_start = models.TimeField(null=True, blank=True)
-    window_end = models.TimeField(null=True, blank=True)
-    is_active = models.BooleanField(default=True)
+    due_date = models.DateField(null=True, blank=True)  # once only; defaults to the day it was created
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["created_at"]
@@ -37,27 +31,25 @@ class Task(models.Model):
 
 class Completion(models.Model):
     """
-    One row per task occurrence the child marked done. A mark is final.
-    Survives the task being renamed or deleted, so the completed list stays
-    readable.
+    One row per task per local day the child marked done. A mark is final.
+    Survives the task being deleted, so history stays correct.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     task = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True, related_name="completions")
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="completions")
+    parent = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="completions")
     task_title = models.CharField(max_length=80)
-    period_start = models.DateTimeField()
-    local_date = models.DateField()
+    local_date = models.DateField()  # the day in the parent's timezone
     done_at = models.DateTimeField()
 
     class Meta:
         ordering = ["-done_at"]
         constraints = [
-            models.UniqueConstraint(fields=["task", "period_start"], name="completion_task_period_unique"),
+            models.UniqueConstraint(fields=["task", "local_date"], name="completion_task_day_unique"),
         ]
         indexes = [
-            models.Index(fields=["room", "local_date"]),
+            models.Index(fields=["parent", "local_date"]),
         ]
 
     def __str__(self) -> str:
-        return f"{self.task_title} @ {self.period_start:%Y-%m-%d %H:%M}"
+        return f"{self.task_title} on {self.local_date}"

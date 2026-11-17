@@ -9,49 +9,51 @@ from rest_framework.views import APIView
 from accounts.permissions import IsChild, IsParent, IsParentOrChild
 from config.exceptions import ApiError, Conflict
 from notifications.service import notify_task_done_after_commit
-from rooms.access import get_room_for
-from rooms.models import Room
 
+from .days import current_day, is_due_on, local_today, now, status_on
 from .models import Completion, Task
-from .occurrences import (
-    Occurrence,
-    current_occurrence,
-    local_today,
-    now,
-    occurrences_between,
-)
 from .serializers import (
-    CompletedListSerializer,
     CompletionSerializer,
-    DoneResponseSerializer,
     HistorySerializer,
-    OccurrenceSerializer,
     TaskSerializer,
     TaskWriteSerializer,
+    TodaySerializer,
 )
 
 MAX_RANGE_DAYS = 31
 DEFAULT_RANGE_DAYS = 7
 
 
-# --- helpers ----------------------------------------------------------------
+def _parent_of(user):
+    """The parent whose room the caller is in."""
+    return user if user.is_parent else user.parent
 
 
 def _task_for(user, task_id) -> Task:
-    """The task if it is in a room the caller belongs to, else 404."""
-    if getattr(user, "is_parent", False):
-        task = Task.objects.select_related("room").filter(pk=task_id, room__parent=user).first()
-    elif getattr(user, "is_child", False):
-        task = Task.objects.select_related("room").filter(pk=task_id, room=user.room).first()
-    else:
-        task = None
+    task = Task.objects.filter(pk=task_id, parent=_parent_of(user)).first()
     if task is None:
         raise ApiError("not_found", "Task not found.", status.HTTP_404_NOT_FOUND)
     return task
 
 
+def _with_status(parent, tasks, day_of) -> list[dict]:
+    """Serialize tasks with the status of the day `day_of(task)` returns."""
+    today = local_today(parent.tzinfo)
+    pairs = [(task, day_of(task)) for task in tasks]
+    done = {
+        (c.task_id, c.local_date): c.done_at
+        for c in Completion.objects.filter(parent=parent, task_id__in=[t.id for t in tasks])
+    }
+    result = []
+    for task, day in pairs:
+        done_at = done.get((task.id, day))
+        task.status = status_on(task, day, today, done_at is not None)
+        task.done_at = done_at
+        result.append(task)
+    return TaskSerializer(result, many=True).data
+
+
 def _parse_range(request, tz) -> tuple[date, date]:
-    """?from=&to= as local dates; defaults to the last 7 days ending today."""
     today = local_today(tz)
     try:
         to_day = date.fromisoformat(request.query_params["to"]) if "to" in request.query_params else today
@@ -69,70 +71,32 @@ def _parse_range(request, tz) -> tuple[date, date]:
     return from_day, to_day
 
 
-def _completions_by_key(room: Room, start, end) -> dict:
-    rows = Completion.objects.filter(room=room, period_start__gte=start, period_start__lt=end, task__isnull=False)
-    return {(c.task_id, c.period_start): c for c in rows}
+class TaskListView(APIView):
+    """Parent: every task, each with the status of today (daily) or its due date (once)."""
 
-
-def _occurrence_payload(occ: Occurrence, at, completion: Completion | None) -> dict:
-    task = occ.task
-    return {
-        "task_id": task.id,
-        "title": task.title,
-        "description": task.description,
-        "repeat": task.repeat,
-        "due_time": task.due_time,
-        "period_start": occ.period_start,
-        "period_end": occ.period_end,
-        "local_date": occ.local_date,
-        "status": occ.status(at, completion is not None),
-        "done_at": completion.done_at if completion else None,
-    }
-
-
-def _occurrences_payload(room: Room, from_day: date, to_day: date) -> list[dict]:
-    at = now()
-    tz = room.tzinfo
-    tasks = list(room.tasks.filter(is_active=True))
-    occs = occurrences_between(tasks, from_day, to_day, tz)
-    if not occs:
-        return []
-    done = _completions_by_key(room, occs[0].period_start, occs[-1].period_end)
-    return [_occurrence_payload(o, at, done.get((o.task.id, o.period_start))) for o in occs]
-
-
-# --- tasks ------------------------------------------------------------------
-
-
-class RoomTaskListView(APIView):
-    permission_classes = [IsParentOrChild]
+    permission_classes = [IsParent]
 
     @extend_schema(responses={200: TaskSerializer(many=True)}, tags=["tasks"])
-    def get(self, request, room_id):
-        room = get_room_for(request.user, room_id)
-        return Response(TaskSerializer(room.tasks.all(), many=True).data)
+    def get(self, request):
+        parent = request.user
+        tz = parent.tzinfo
+        today = local_today(tz)
+        tasks = list(parent.tasks.all())
+        return Response(_with_status(parent, tasks, lambda t: current_day(t, today, tz)))
 
     @extend_schema(request=TaskWriteSerializer, responses={201: TaskSerializer}, tags=["tasks"])
-    def post(self, request, room_id):
-        if not IsParent().has_permission(request, self):
-            raise ApiError("forbidden", "Only the parent can create tasks.", status.HTTP_403_FORBIDDEN)
-        room = get_room_for(request.user, room_id)
-        serializer = TaskWriteSerializer(data=request.data, context={"room": room})
+    def post(self, request):
+        serializer = TaskWriteSerializer(data=request.data, context={"parent": request.user})
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
-        return Response(TaskSerializer(task).data, status=status.HTTP_201_CREATED)
+        tz = request.user.tzinfo
+        today = local_today(tz)
+        data = _with_status(request.user, [task], lambda t: current_day(t, today, tz))[0]
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class TaskDetailView(APIView):
     permission_classes = [IsParent]
-
-    @extend_schema(request=TaskWriteSerializer, responses={200: TaskSerializer}, tags=["tasks"])
-    def patch(self, request, task_id):
-        task = _task_for(request.user, task_id)
-        serializer = TaskWriteSerializer(task, data=request.data, partial=True, context={"room": task.room})
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(TaskSerializer(task).data)
 
     @extend_schema(responses={204: None}, tags=["tasks"])
     def delete(self, request, task_id):
@@ -141,93 +105,73 @@ class TaskDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# --- today, completed, history ---------------------------------------------
-
-
 class TodayView(APIView):
+    """Both roles: the tasks due today, each open or done."""
+
     permission_classes = [IsParentOrChild]
 
-    @extend_schema(responses={200: OccurrenceSerializer(many=True)}, tags=["tasks"])
-    def get(self, request, room_id):
-        room = get_room_for(request.user, room_id)
-        today = local_today(room.tzinfo)
-        return Response({"date": today, "occurrences": _occurrences_payload(room, today, today)})
-
-
-_RANGE_PARAMS = [
-    OpenApiParameter("from", str, description="First local day, YYYY-MM-DD. Default: 6 days before `to`."),
-    OpenApiParameter("to", str, description="Last local day, YYYY-MM-DD. Default: today in the room's timezone."),
-]
-
-
-class CompletedView(APIView):
-    permission_classes = [IsParentOrChild]
-
-    @extend_schema(parameters=_RANGE_PARAMS, responses={200: CompletedListSerializer}, tags=["tasks"])
-    def get(self, request, room_id):
-        room = get_room_for(request.user, room_id)
-        from_day, to_day = _parse_range(request, room.tzinfo)
-        rows = Completion.objects.filter(room=room, local_date__gte=from_day, local_date__lte=to_day).order_by(
-            "-local_date", "-done_at"
-        )
-        days: list[dict] = []
-        for c in rows:
-            if not days or days[-1]["date"] != c.local_date:
-                days.append({"date": c.local_date, "count": 0, "tasks": []})
-            days[-1]["count"] += 1
-            days[-1]["tasks"].append(
-                {"id": c.id, "task_id": c.task_id, "title": c.task_title, "period_start": c.period_start, "done_at": c.done_at}
-            )
-        return Response(CompletedListSerializer({"from_date": from_day, "to_date": to_day, "days": days}).data)
-
-
-class HistoryView(APIView):
-    permission_classes = [IsParentOrChild]
-
-    @extend_schema(parameters=_RANGE_PARAMS, responses={200: HistorySerializer}, tags=["tasks"])
-    def get(self, request, room_id):
-        room = get_room_for(request.user, room_id)
-        from_day, to_day = _parse_range(request, room.tzinfo)
-        occurrences = _occurrences_payload(room, from_day, to_day)
-        return Response(HistorySerializer({"from_date": from_day, "to_date": to_day, "occurrences": occurrences}).data)
-
-
-# --- done -------------------------------------------------------------------
+    @extend_schema(responses={200: TodaySerializer}, tags=["tasks"])
+    def get(self, request):
+        parent = _parent_of(request.user)
+        tz = parent.tzinfo
+        today = local_today(tz)
+        tasks = [t for t in parent.tasks.all() if is_due_on(t, today, tz)]
+        return Response({"date": today, "tasks": _with_status(parent, tasks, lambda t: today)})
 
 
 class TaskDoneView(APIView):
-    """A done mark is final: there is no undo in v1."""
+    """Child: marks today's occurrence done. A mark is final."""
 
     permission_classes = [IsChild]
 
-    @extend_schema(request=None, responses={201: DoneResponseSerializer}, tags=["tasks"])
+    @extend_schema(request=None, responses={201: CompletionSerializer}, tags=["tasks"])
     def post(self, request, task_id):
         task = _task_for(request.user, task_id)
-        if not task.is_active:
-            raise Conflict("task_paused", "This task is paused.")
+        parent = task.parent
         at = now()
-        occ = current_occurrence(task, at, task.room.tzinfo)
-        if occ is None:
-            raise Conflict("no_open_occurrence", "This task is not open right now.")
-
+        today = at.astimezone(parent.tzinfo).date()
+        if not is_due_on(task, today, parent.tzinfo):
+            raise Conflict("not_due_today", "This task is not due today.")
         try:
             with transaction.atomic():
                 completion = Completion.objects.create(
-                    task=task,
-                    room=task.room,
-                    task_title=task.title,
-                    period_start=occ.period_start,
-                    local_date=occ.local_date,
-                    done_at=at,
+                    task=task, parent=parent, task_title=task.title, local_date=today, done_at=at
                 )
-                notify_task_done_after_commit(completion, request.user.display_name)
+                notify_task_done_after_commit(completion)
         except IntegrityError:
-            raise Conflict("already_done", "This task is already marked done.")
+            raise Conflict("already_done", "This task is already marked done today.")
+        return Response(CompletionSerializer(completion).data, status=status.HTTP_201_CREATED)
 
-        return Response(
-            {
-                "completion": CompletionSerializer(completion).data,
-                "occurrence": OccurrenceSerializer(_occurrence_payload(occ, at, completion)).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+
+_RANGE_PARAMS = [
+    OpenApiParameter("from", str, description="First day, YYYY-MM-DD. Default: 6 days before `to`."),
+    OpenApiParameter("to", str, description="Last day, YYYY-MM-DD. Default: today in the parent's timezone."),
+]
+
+
+class HistoryView(APIView):
+    """Parent: for each day, newest first, how many tasks were due and how many were done."""
+
+    permission_classes = [IsParent]
+
+    @extend_schema(parameters=_RANGE_PARAMS, responses={200: HistorySerializer}, tags=["tasks"])
+    def get(self, request):
+        parent = request.user
+        tz = parent.tzinfo
+        from_day, to_day = _parse_range(request, tz)
+        tasks = list(parent.tasks.all())
+        completions = Completion.objects.filter(parent=parent, local_date__gte=from_day, local_date__lte=to_day)
+        done_by_day: dict[date, list[Completion]] = {}
+        for c in completions:
+            done_by_day.setdefault(c.local_date, []).append(c)
+
+        days = []
+        day = to_day
+        while day >= from_day:
+            due_ids = {t.id for t in tasks if is_due_on(t, day, tz)}
+            done = done_by_day.get(day, [])
+            # A completion of a since-deleted task still counts as a task that day.
+            extra = sum(1 for c in done if c.task_id not in due_ids)
+            days.append({"date": day, "total": len(due_ids) + extra, "done": len(done)})
+            day -= timedelta(days=1)
+        return Response(HistorySerializer({"from_date": from_day, "to_date": to_day, "days": days}).data)

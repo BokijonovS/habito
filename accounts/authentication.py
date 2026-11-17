@@ -2,7 +2,7 @@
 Authenticates a child device.
 
 The child's token is 32 random bytes as 64 hex characters. Only its SHA-256
-hash is stored. The class runs before JWT authentication: a 64-hex token is
+hash is stored. This class runs before JWT authentication: a 64-hex token is
 looked up here, anything else is left for the JWT class.
 """
 
@@ -30,7 +30,7 @@ class ChildTokenAuthentication(BaseAuthentication):
         if not _HEX_TOKEN.match(token):
             return None  # Probably a parent JWT; let the next class try.
 
-        child = Child.objects.select_related("room").filter(device_token_hash=hash_child_token(token)).first()
+        child = Child.objects.select_related("parent").filter(device_token_hash=hash_child_token(token)).first()
         if child is None:
             raise exceptions.AuthenticationFailed("Child token is invalid or revoked.")
         return (child, token)
@@ -43,7 +43,7 @@ try:  # Tell drf-spectacular how this scheme shows up in the OpenAPI file.
     from drf_spectacular.extensions import OpenApiAuthenticationExtension
 
     class ChildTokenScheme(OpenApiAuthenticationExtension):
-        target_class = "rooms.authentication.ChildTokenAuthentication"
+        target_class = "accounts.authentication.ChildTokenAuthentication"
         name = "childToken"
 
         def get_security_definition(self, auto_schema):

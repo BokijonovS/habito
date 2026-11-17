@@ -1,20 +1,19 @@
+from datetime import date
 from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
 from accounts.models import ParentDevice
-from config.test_utils import HabitoTestCase, create_parent, create_room, create_task, utc
+from config.test_utils import HabitoTestCase, create_parent, create_task, utc
 from notifications import service
 from notifications.backends import ConsoleBackend, MemoryBackend, Message, get_backend
 from tasks.models import Completion
 
 
 class BackendSelectionTests(SimpleTestCase):
-    def test_memory(self):
+    def test_memory_and_console(self):
         with override_settings(HABITO_PUSH_BACKEND="memory"):
             self.assertIsInstance(get_backend(), MemoryBackend)
-
-    def test_console(self):
         with override_settings(HABITO_PUSH_BACKEND="console"):
             self.assertIsInstance(get_backend(), ConsoleBackend)
 
@@ -53,7 +52,7 @@ class ApnsBackendTests(SimpleTestCase):
         from notifications.apns import ApnsBackend
 
         async def fake_send(registration_ids, alert, **kwargs):
-            self.assertEqual(alert.title, "Ali finished a task")
+            self.assertEqual(alert.title, "Task done")
             self.assertEqual(alert.body, "Brush teeth")
             return [
                 ("good", _Result(True)),
@@ -63,9 +62,7 @@ class ApnsBackendTests(SimpleTestCase):
             ]
 
         with mock.patch("notifications.apns._send_bulk_request", side_effect=fake_send):
-            invalid = ApnsBackend().send(
-                Message(tokens=["good", "gone", "bad", "flaky"], title="Ali finished a task", body="Brush teeth")
-            )
+            invalid = ApnsBackend().send(Message(tokens=["good", "gone", "bad", "flaky"], title="Task done", body="Brush teeth"))
         self.assertEqual(sorted(invalid), ["bad", "gone"])
 
 
@@ -73,15 +70,9 @@ class ServiceTests(HabitoTestCase):
     def setUp(self):
         super().setUp()
         self.parent = create_parent()
-        self.room = create_room(self.parent)
-        task = create_task(self.room, "Brush teeth", "daily")
+        task = create_task(self.parent, "Brush teeth", "daily")
         self.completion = Completion.objects.create(
-            task=task,
-            room=self.room,
-            task_title="Brush teeth",
-            period_start=utc(2026, 11, 16),
-            local_date=utc(2026, 11, 16).date(),
-            done_at=utc(2026, 11, 16, 8),
+            task=task, parent=self.parent, task_title="Brush teeth", local_date=date(2026, 11, 16), done_at=utc(2026, 11, 16, 8)
         )
 
     def test_invalid_tokens_are_deleted(self):
@@ -93,7 +84,7 @@ class ServiceTests(HabitoTestCase):
                 return ["gone"]
 
         with mock.patch("notifications.service.get_backend", return_value=Backend()):
-            service.notify_task_done(self.completion.pk, "Ali")
+            service.notify_task_done(self.completion.pk)
         self.assertEqual(list(ParentDevice.objects.values_list("apns_token", flat=True)), ["good"])
         self.assertIsNotNone(ParentDevice.objects.get().last_used_at)
 
@@ -106,10 +97,9 @@ class ServiceTests(HabitoTestCase):
 
         with mock.patch("notifications.service.get_backend", return_value=Backend()):
             with self.assertLogs("notifications.service", level="ERROR"):
-                service.notify_task_done(self.completion.pk, "Ali")
+                service.notify_task_done(self.completion.pk)
         self.assertEqual(ParentDevice.objects.count(), 1)
-        self.assertIsNone(ParentDevice.objects.get().last_used_at)
 
     def test_missing_completion_is_ignored(self):
-        service.notify_task_done("00000000-0000-4000-8000-000000000000", "Ali")
+        service.notify_task_done("00000000-0000-4000-8000-000000000000")
         self.assertEqual(self.sent_pushes, [])

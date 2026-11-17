@@ -9,13 +9,13 @@ from django.test import override_settings
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import Parent
+from accounts.models import Child, Parent, generate_child_token, hash_child_token
 
 PASSWORD = "correct-horse-battery"
 
 
-def create_parent(email: str = "mom@example.com", display_name: str = "Mom", password: str = PASSWORD) -> Parent:
-    return Parent.objects.create_user(email=email, password=password, display_name=display_name)
+def create_parent(email: str = "mom@example.com", tz: str = "Asia/Tashkent", password: str = PASSWORD) -> Parent:
+    return Parent.objects.create_user(email=email, password=password, timezone=tz)
 
 
 def parent_client(parent: Parent) -> APIClient:
@@ -25,10 +25,39 @@ def parent_client(parent: Parent) -> APIClient:
     return client
 
 
+def join(parent: Parent) -> str:
+    """Creates the child directly and returns the raw device token."""
+    token = generate_child_token()
+    Child.objects.filter(parent=parent).delete()
+    Child.objects.create(parent=parent, device_token_hash=hash_child_token(token))
+    return token
+
+
 def child_client(token: str) -> APIClient:
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
     return client
+
+
+def utc(year, month, day, hour=0, minute=0, second=0) -> datetime:
+    return datetime(year, month, day, hour, minute, second, tzinfo=dt_timezone.utc)
+
+
+@contextmanager
+def frozen_now(at: datetime):
+    """Freeze the clock used by views and Django's timezone.now()."""
+    with mock.patch("django.utils.timezone.now", return_value=at), mock.patch("tasks.days.now", return_value=at):
+        yield
+
+
+def create_task(parent, title="Brush teeth", repeat="daily", created_at=None, **fields):
+    from tasks.models import Task
+
+    task = Task.objects.create(parent=parent, title=title, repeat=repeat, **fields)
+    if created_at is not None:  # auto_now_add ignores the given value
+        Task.objects.filter(pk=task.pk).update(created_at=created_at)
+        task.refresh_from_db()
+    return task
 
 
 @override_settings(HABITO_PUSH_BACKEND="memory")
@@ -53,46 +82,3 @@ class HabitoTestCase(APITestCase):
         self.assertIn("error", response.json())
         if code is not None:
             self.assertEqual(response.json()["error"]["code"], code, response.content)
-
-
-def create_room(parent: Parent, name: str = "Ali's room", tz: str = "Europe/Rome"):
-    from rooms.models import Room
-
-    room = Room(parent=parent, name=name, timezone=tz)
-    room.issue_join_code()
-    room.save()
-    return room
-
-
-def join_room(room, display_name: str = "Ali") -> str:
-    """Creates the child directly and returns the raw device token."""
-    from rooms.models import Child, generate_child_token, hash_child_token
-
-    token = generate_child_token()
-    Child.objects.create(room=room, display_name=display_name, device_token_hash=hash_child_token(token))
-    room.clear_join_code()
-    room.save()
-    room.refresh_from_db()
-    return token
-
-
-def utc(year, month, day, hour=0, minute=0, second=0) -> datetime:
-    return datetime(year, month, day, hour, minute, second, tzinfo=dt_timezone.utc)
-
-
-@contextmanager
-def frozen_now(at: datetime):
-    """Freeze the clock used by occurrences, views and Django's timezone.now()."""
-    with mock.patch("django.utils.timezone.now", return_value=at), mock.patch("tasks.occurrences.now", return_value=at):
-        yield
-
-
-def create_task(room, title="Brush teeth", repeat="daily", **fields):
-    from tasks.models import Task
-
-    task = Task.objects.create(room=room, title=title, repeat=repeat, **fields)
-    created_at = fields.get("created_at")
-    if created_at is not None:  # auto_now_add ignores the given value
-        Task.objects.filter(pk=task.pk).update(created_at=created_at)
-        task.refresh_from_db()
-    return task

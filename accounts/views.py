@@ -10,10 +10,13 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.exceptions import ApiError
 
-from .models import ParentDevice
+from .models import Child, Parent, ParentDevice, generate_child_token, hash_child_token
 from .permissions import IsParent, IsParentOrChild
 from .serializers import (
     AuthResponseSerializer,
+    ChildSerializer,
+    JoinResponseSerializer,
+    JoinSerializer,
     LoginSerializer,
     LogoutSerializer,
     MeResponseSerializer,
@@ -24,7 +27,11 @@ from .serializers import (
     TokenPairSerializer,
     issue_tokens,
 )
-from .throttles import LoginThrottle
+from .throttles import JoinThrottle, LoginThrottle
+
+
+def _invalid_token() -> ApiError:
+    return ApiError("invalid_token", "Refresh token is invalid or expired.", status.HTTP_401_UNAUTHORIZED)
 
 
 class RegisterView(APIView):
@@ -51,8 +58,14 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
         if not serializer.is_valid():
+            if set(serializer.errors) - {"non_field_errors"}:
+                raise ApiError("invalid_input", "Email, password and timezone must be valid.")
             raise ApiError("invalid_credentials", "Email or password is wrong.", status.HTTP_401_UNAUTHORIZED)
         parent = serializer.validated_data["parent"]
+        tz = serializer.validated_data.get("timezone")
+        if tz and tz != parent.timezone:
+            parent.timezone = tz
+            parent.save(update_fields=["timezone"])
         return Response({"parent": ParentSerializer(parent).data, **issue_tokens(parent)})
 
 
@@ -75,14 +88,10 @@ class RefreshView(APIView):
             old.verify()
             parent_id = old["user_id"]
         except (TokenError, KeyError):
-            raise ApiError("invalid_token", "Refresh token is invalid or expired.", status.HTTP_401_UNAUTHORIZED)
-
-        from .models import Parent  # local import keeps module import order simple
-
+            raise _invalid_token()
         parent = Parent.objects.filter(pk=parent_id, is_active=True).first()
         if parent is None:
-            raise ApiError("invalid_token", "Refresh token is invalid or expired.", status.HTTP_401_UNAUTHORIZED)
-
+            raise _invalid_token()
         with transaction.atomic():
             old.blacklist()
             tokens = issue_tokens(parent)
@@ -103,7 +112,6 @@ class LogoutView(APIView):
             token.blacklist()
         except (TokenError, KeyError):
             raise ApiError("invalid_token", "Refresh token is invalid or expired.", status.HTTP_400_BAD_REQUEST)
-
         apns_token = serializer.validated_data.get("apns_token")
         if apns_token:
             ParentDevice.objects.filter(parent=request.user, apns_token=apns_token).delete()
@@ -115,8 +123,8 @@ class AccountView(APIView):
 
     @extend_schema(responses={204: None}, tags=["auth"])
     def delete(self, request):
-        # Cascades: devices, rooms, children, tasks, completions. Token rows are
-        # removed explicitly because simplejwt keeps them with a null user.
+        # Cascades: devices, child, tasks, completions. Token rows are removed
+        # explicitly because simplejwt keeps them with a null user.
         with transaction.atomic():
             OutstandingToken.objects.filter(user=request.user).delete()
             request.user.delete()
@@ -131,19 +139,10 @@ class MeView(APIView):
         user = request.user
         if user.is_parent:
             return Response({"role": "parent", "parent": ParentSerializer(user).data})
-
-        from rooms.serializers import ChildSerializer, RoomSerializer
-
-        return Response(
-            {
-                "role": "child",
-                "child": ChildSerializer(user).data,
-                "room": RoomSerializer(user.room).data,
-            }
-        )
+        return Response({"role": "child", "child": ChildSerializer(user).data})
 
 
-class DeviceListView(APIView):
+class DeviceView(APIView):
     permission_classes = [IsParent]
 
     @extend_schema(request=ParentDeviceSerializer, responses={201: ParentDeviceSerializer}, tags=["devices"])
@@ -153,27 +152,43 @@ class DeviceListView(APIView):
         apns_token = serializer.validated_data["apns_token"]
         with transaction.atomic():
             device = ParentDevice.objects.filter(apns_token=apns_token).first()
-            if device is None:
+            created = device is None
+            if created:
                 device = ParentDevice.objects.create(parent=request.user, apns_token=apns_token)
-                created = True
-            else:
-                created = False
-                if device.parent_id != request.user.id:
-                    # The phone changed hands (another parent logged in on it).
-                    device.parent = request.user
-                    device.save(update_fields=["parent"])
+            elif device.parent_id != request.user.id:
+                # The phone changed hands (another parent logged in on it).
+                device.parent = request.user
+                device.save(update_fields=["parent"])
         return Response(
             ParentDeviceSerializer(device).data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
 
-class DeviceDetailView(APIView):
-    permission_classes = [IsParent]
+class JoinView(APIView):
+    """
+    The child's device sends the parent's room code and gets a device token.
+    Joining again (a new phone, a reinstall) replaces the previous child
+    device, which is signed out.
+    """
 
-    @extend_schema(responses={204: None}, tags=["devices"])
-    def delete(self, request, device_id):
-        deleted, _ = ParentDevice.objects.filter(parent=request.user, pk=device_id).delete()
-        if not deleted:
-            raise ApiError("not_found", "Device not found.", status.HTTP_404_NOT_FOUND)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [JoinThrottle]
+
+    @extend_schema(request=JoinSerializer, responses={201: JoinResponseSerializer}, tags=["child"])
+    def post(self, request):
+        serializer = JoinSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        parent = Parent.objects.filter(room_code=serializer.validated_data["code"], is_active=True).first()
+        if parent is None:
+            raise ApiError("invalid_code", "That room code is not valid.", status.HTTP_404_NOT_FOUND)
+
+        token = generate_child_token()
+        with transaction.atomic():
+            Child.objects.filter(parent=parent).delete()
+            child = Child.objects.create(parent=parent, device_token_hash=hash_child_token(token))
+        return Response(
+            {"child_token": token, "child": ChildSerializer(child).data},
+            status=status.HTTP_201_CREATED,
+        )

@@ -57,7 +57,6 @@ INSTALLED_APPS = [
     "drf_spectacular",
     # Habito
     "accounts",
-    "rooms",
     "tasks",
     "notifications",
 ]
@@ -117,7 +116,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # --- Time -------------------------------------------------------------------
 # Everything is stored in UTC. "Today" and "this hour" are computed per room
-# in the room's own IANA timezone.
+# in the parent's own IANA timezone.
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -131,7 +130,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rooms.authentication.ChildTokenAuthentication",
+        "accounts.authentication.ChildTokenAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -165,7 +164,7 @@ SIMPLE_JWT = {
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Habito API",
-    "DESCRIPTION": "REST API that links a parent and a child through a room.",
+    "DESCRIPTION": "REST API for Habito: a parent sets tasks, the child marks them done.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "SCHEMA_PATH_PREFIX": r"/api/v1",

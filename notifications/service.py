@@ -15,24 +15,23 @@ from .backends import Message, get_backend
 log = logging.getLogger(__name__)
 
 
-def notify_task_done(completion_id, child_name: str) -> None:
+def notify_task_done(completion_id) -> None:
     """
-    Sends one push per registered phone of the room's parent. The message
-    carries only the child's name and the task title. Failures are logged
-    and never remove the completion.
+    Sends one push per registered phone of the parent. The message carries
+    only the task title. Failures are logged and never remove the completion.
     """
-    completion = Completion.objects.select_related("room").filter(pk=completion_id).first()
+    completion = Completion.objects.filter(pk=completion_id).first()
     if completion is None:
         return
-    devices = list(ParentDevice.objects.filter(parent_id=completion.room.parent_id))
+    devices = list(ParentDevice.objects.filter(parent_id=completion.parent_id))
     if not devices:
         return
 
     message = Message(
         tokens=[d.apns_token for d in devices],
-        title=f"{child_name} finished a task",
+        title="Task done",
         body=completion.task_title,
-        data={"type": "task_done", "room_id": str(completion.room_id), "completion_id": str(completion.id)},
+        data={"type": "task_done", "task_id": str(completion.task_id), "completion_id": str(completion.id)},
     )
     try:
         invalid = get_backend().send(message)
@@ -47,6 +46,6 @@ def notify_task_done(completion_id, child_name: str) -> None:
     )
 
 
-def notify_task_done_after_commit(completion: Completion, child_name: str) -> None:
+def notify_task_done_after_commit(completion: Completion) -> None:
     """Schedule the push for after the current transaction commits."""
-    transaction.on_commit(lambda: notify_task_done(completion.pk, child_name))
+    transaction.on_commit(lambda: notify_task_done(completion.pk))
