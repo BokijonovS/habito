@@ -48,7 +48,7 @@ All ids are UUIDs, timestamps are ISO 8601 UTC. "Today" is computed in the paren
 
 ## API endpoints
 
-14 endpoints under `/api/v1`. All but register, login, refresh and join need `Authorization: Bearer <token>`.
+15 endpoints under `/api/v1`. All but register, login, refresh and join need `Authorization: Bearer <token>`.
 
 | Method | Path | Who | What it does |
 | --- | --- | --- | --- |
@@ -62,6 +62,7 @@ All ids are UUIDs, timestamps are ISO 8601 UTC. "Today" is computed in the paren
 | POST | /join | anyone | `{code}` → `child_token`. Replaces any previous child device. 10 tries per IP per 15 min |
 | GET | /tasks | parent | All tasks with status and done_at (today for daily, the due date for once) |
 | POST | /tasks | parent | `{title, repeat, due_date?}` → the task |
+| PATCH | /tasks/{task_id} | parent | `{title?, repeat?, due_date?}`: edits the task. Switching to daily clears the due date; switching to once without a date makes it due today. Past completions stay |
 | DELETE | /tasks/{task_id} | parent | Deletes the task; completions stay |
 | GET | /today | parent, child | `{date, tasks: [...]}`, the tasks due today, each `open` or `done` |
 | POST | /tasks/{task_id}/done | child | Marks today's occurrence done, pushes to the parent. 409 if already done or not due today |
@@ -82,4 +83,4 @@ All ids are UUIDs, timestamps are ISO 8601 UTC. "Today" is computed in the paren
 
 ## Out of scope for v1
 
-Hourly tasks, editing or pausing tasks, undo, multiple children per parent, rotating the room code, a per-task completed list, password reset by email, any game state on the server.
+Hourly tasks, pausing tasks, undo, multiple children per parent, rotating the room code, a per-task completed list, password reset by email, any game state on the server.

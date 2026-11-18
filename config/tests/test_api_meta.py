@@ -16,6 +16,7 @@ ENDPOINTS = {
     ("post", "/api/v1/join"),
     ("get", "/api/v1/tasks"),
     ("post", "/api/v1/tasks"),
+    ("patch", "/api/v1/tasks/{task_id}"),
     ("delete", "/api/v1/tasks/{task_id}"),
     ("post", "/api/v1/tasks/{task_id}/done"),
     ("get", "/api/v1/today"),
@@ -60,10 +61,10 @@ class OpenApiTests(HabitoTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"swagger", response.content.lower())
 
-    def test_schema_lists_exactly_the_14_endpoints(self):
+    def test_schema_lists_exactly_the_15_endpoints(self):
         response = self.client.get("/api/schema/", HTTP_ACCEPT="application/vnd.oai.openapi+json")
         self.assertEqual(response.status_code, 200, response.content[:300])
         paths = response.json()["paths"]
         found = {(method, path) for path, ops in paths.items() for method in ops}
         self.assertEqual(found, ENDPOINTS)
-        self.assertEqual(len(ENDPOINTS), 14)
+        self.assertEqual(len(ENDPOINTS), 15)

@@ -46,7 +46,7 @@ The API is at `http://127.0.0.1:8000/api/v1/` and the interactive docs at `http:
 python manage.py spectacular --file openapi.yaml
 ```
 
-Run the tests (97 of them, under 10 seconds):
+Run the tests (108 of them, under 10 seconds):
 
 ```bat
 python manage.py test
@@ -96,7 +96,7 @@ Each app has a `tests/` package. The suite covers every endpoint, every endpoint
 
 1. Parent app: register or login with email and password. The app also sends the device timezone in the same call so the server knows when a day starts. The response carries the `room_code` to show on screen.
 2. Parent app registers its APNs token with `POST /devices`.
-3. Parent creates tasks with `POST /tasks` and reads them, with statuses, from `GET /tasks`. `GET /history` gives the per-day counts.
+3. Parent creates tasks with `POST /tasks`, edits them with `PATCH /tasks/{id}`, and reads them, with statuses, from `GET /tasks`. `GET /history` gives the per-day counts.
 4. Child app: `POST /join` with the code, keep the `child_token`. Then `GET /today` and `POST /tasks/{id}/done`.
 5. The parent's phones get a push with the task title.
 
@@ -123,5 +123,6 @@ Things the brief left open, and what the server does. Each is small and can be c
 17. **The real APNs backend has not been run against Apple** (no key yet). It is covered by a test with Apple's responses mocked.
 18. **Join rate limit is per IP.** Behind a reverse proxy, set `NUM_PROXIES` in `REST_FRAMEWORK` or the limit counts the proxy's address.
 19. **HTTPS-only** is on whenever `DEBUG=false`; the proxy that terminates TLS must send `X-Forwarded-Proto: https`.
+20. **Editing a task** (added 2026-11-18) changes the task in place, so a renamed daily task keeps its history. Old completions keep the title they were marked with. Switching once → daily clears the due date; daily → once without a date makes it due today.
 
-Not in v1: hourly tasks, editing or pausing tasks, undo, several children per parent, rotating the room code, a per-task completed list, password reset, game state on the server.
+Not in v1: hourly tasks, pausing tasks, undo, several children per parent, rotating the room code, a per-task completed list, password reset, game state on the server.

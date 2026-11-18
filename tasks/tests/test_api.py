@@ -107,6 +107,79 @@ class ListTasksTests(HabitoTestCase):
         self.assertError(child_client(join(self.parent)).get(self.url), 403, "forbidden")
 
 
+class EditTaskTests(HabitoTestCase):
+    def setUp(self):
+        super().setUp()
+        self.parent = create_parent()
+        self.client = parent_client(self.parent)
+        self.task = create_task(self.parent, "Brush teeth", "daily", created_at=utc(2026, 11, 1))
+        self.url = reverse("task-detail", args=[self.task.id])
+
+    def test_rename(self):
+        with frozen_now(NOON):
+            response = self.client.patch(self.url, {"title": "Brush teeth well"})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["title"], "Brush teeth well")
+        self.assertEqual(response.json()["status"], "open")
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.repeat, "daily")
+
+    def test_daily_to_once_defaults_due_date_to_today(self):
+        with frozen_now(NOON):
+            response = self.client.patch(self.url, {"repeat": "once"})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["due_date"], "2026-11-16")
+
+    def test_daily_to_once_with_due_date(self):
+        with frozen_now(NOON):
+            response = self.client.patch(self.url, {"repeat": "once", "due_date": "2026-11-20"})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["due_date"], "2026-11-20")
+        self.assertEqual(response.json()["status"], "upcoming")
+
+    def test_once_to_daily_clears_due_date(self):
+        once = create_task(self.parent, "Dentist", "once", due_date=date(2026, 11, 20), created_at=utc(2026, 11, 1))
+        with frozen_now(NOON):
+            response = self.client.patch(reverse("task-detail", args=[once.id]), {"repeat": "daily"})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertIsNone(response.json()["due_date"])
+        self.assertEqual(response.json()["status"], "open")
+
+    def test_move_due_date_of_once_task(self):
+        once = create_task(self.parent, "Dentist", "once", due_date=date(2026, 11, 20), created_at=utc(2026, 11, 1))
+        with frozen_now(NOON):
+            response = self.client.patch(reverse("task-detail", args=[once.id]), {"due_date": "2026-11-25"})
+        self.assertEqual(response.json()["due_date"], "2026-11-25")
+
+    def test_daily_cannot_take_due_date(self):
+        response = self.client.patch(self.url, {"due_date": "2026-11-20"})
+        self.assertError(response, 400, "invalid_input")
+        self.assertIn("due_date", response.json()["error"]["fields"])
+
+    def test_validation(self):
+        self.assertError(self.client.patch(self.url, {"title": ""}), 400, "invalid_input")
+        self.assertError(self.client.patch(self.url, {"title": "x" * 81}), 400, "invalid_input")
+        self.assertError(self.client.patch(self.url, {"repeat": "hourly"}), 400, "invalid_input")
+
+    def test_keeps_completions(self):
+        Completion.objects.create(task=self.task, parent=self.parent, task_title="Brush teeth", local_date=date(2026, 11, 15), done_at=utc(2026, 11, 15, 3))
+        with frozen_now(NOON):
+            self.client.patch(self.url, {"title": "New name"})
+        completion = Completion.objects.get()
+        self.assertEqual(completion.task, self.task)
+        self.assertEqual(completion.task_title, "Brush teeth")
+
+    def test_other_parents_task_404(self):
+        other = create_task(create_parent("dad@example.com"), "Theirs", "daily")
+        self.assertError(self.client.patch(reverse("task-detail", args=[other.id]), {"title": "Hacked"}), 404, "not_found")
+        self.assertEqual(Task.objects.get(pk=other.pk).title, "Theirs")
+
+    def test_child_and_anonymous_forbidden(self):
+        self.assertError(child_client(join(self.parent)).patch(self.url, {"title": "X"}), 403, "forbidden")
+        self.assertError(self.client.__class__().patch(self.url, {"title": "X"}), 401)
+        self.assertEqual(Task.objects.get(pk=self.task.pk).title, "Brush teeth")
+
+
 class DeleteTaskTests(HabitoTestCase):
     def setUp(self):
         super().setUp()

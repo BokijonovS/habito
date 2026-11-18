@@ -46,6 +46,13 @@ class PermissionMatrixTests(HabitoTestCase):
             self.check("anon", method, reverse("tasks"), 401, data)
             self.check("parent", method, reverse("tasks"), "ok", data)
 
+    def test_task_edit(self):
+        url = reverse("task-detail", args=[self.task.id])
+        self.check("child", "patch", url, 403, {"title": "X"})
+        self.check("anon", "patch", url, 401, {"title": "X"})
+        self.check("parent", "patch", reverse("task-detail", args=[self.other_task.id]), 404, {"title": "X"})
+        self.check("parent", "patch", url, "ok", {"title": "X"})
+
     def test_task_delete(self):
         self.check("child", "delete", reverse("task-detail", args=[self.task.id]), 403)
         self.check("anon", "delete", reverse("task-detail", args=[self.task.id]), 401)

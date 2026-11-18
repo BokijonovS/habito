@@ -98,6 +98,17 @@ class TaskListView(APIView):
 class TaskDetailView(APIView):
     permission_classes = [IsParent]
 
+    @extend_schema(request=TaskWriteSerializer, responses={200: TaskSerializer}, tags=["tasks"])
+    def patch(self, request, task_id):
+        """Edit title, repeat or due_date. Past completions are untouched."""
+        task = _task_for(request.user, task_id)
+        serializer = TaskWriteSerializer(task, data=request.data, partial=True, context={"parent": request.user})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        tz = request.user.tzinfo
+        today = local_today(tz)
+        return Response(_with_status(request.user, [task], lambda t: current_day(t, today, tz))[0])
+
     @extend_schema(responses={204: None}, tags=["tasks"])
     def delete(self, request, task_id):
         task = _task_for(request.user, task_id)

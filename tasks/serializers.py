@@ -24,7 +24,10 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         fields = ["title", "repeat", "due_date"]
 
     def validate(self, attrs):
-        if attrs["repeat"] == Repeat.DAILY and attrs.get("due_date") is not None:
+        # On an edit, judge the combination of what is sent and what is stored.
+        repeat = attrs.get("repeat", self.instance.repeat if self.instance else None)
+        due_date = attrs["due_date"] if "due_date" in attrs else (self.instance.due_date if self.instance else None)
+        if repeat == Repeat.DAILY and due_date is not None and "due_date" in attrs:
             raise serializers.ValidationError({"due_date": "A daily task has no due date."})
         return attrs
 
@@ -33,6 +36,15 @@ class TaskWriteSerializer(serializers.ModelSerializer):
         if validated_data["repeat"] == Repeat.ONCE and validated_data.get("due_date") is None:
             validated_data["due_date"] = local_today(parent.tzinfo)
         return Task.objects.create(parent=parent, **validated_data)
+
+    def update(self, instance, validated_data):
+        """Parent edits title, repeat or due date. Switching kind fixes due_date up."""
+        repeat = validated_data.get("repeat", instance.repeat)
+        if repeat == Repeat.DAILY:
+            validated_data["due_date"] = None
+        elif validated_data.get("due_date", instance.due_date) is None:
+            validated_data["due_date"] = local_today(instance.parent.tzinfo)
+        return super().update(instance, validated_data)
 
 
 class TodaySerializer(serializers.Serializer):
