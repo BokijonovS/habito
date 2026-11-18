@@ -49,6 +49,24 @@ class RegisterTests(HabitoTestCase):
         self.assertIn("access", body)
         self.assertIn("refresh", body)
 
+    def test_register_with_child_name(self):
+        response = self.client.post(self.url, {"email": "a@example.com", "password": PASSWORD, "child_name": "  Ali "})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["parent"]["child_name"], "Ali")
+        self.assertEqual(Parent.objects.get(email="a@example.com").child_name, "Ali")
+
+    def test_child_name_is_optional_and_empty_by_default(self):
+        response = self.client.post(self.url, {"email": "a@example.com", "password": PASSWORD})
+        self.assertEqual(response.json()["parent"]["child_name"], "")
+        response = self.client.post(self.url, {"email": "b@example.com", "password": PASSWORD, "child_name": ""})
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["parent"]["child_name"], "")
+
+    def test_child_name_too_long(self):
+        response = self.client.post(self.url, {"email": "a@example.com", "password": PASSWORD, "child_name": "x" * 41})
+        self.assertError(response, 400, "invalid_input")
+        self.assertIn("child_name", response.json()["error"]["fields"])
+
     def test_register_with_timezone(self):
         response = self.client.post(self.url, {"email": "a@example.com", "password": PASSWORD, "timezone": "Asia/Tashkent"})
         self.assertEqual(response.status_code, 201, response.content)
@@ -199,6 +217,42 @@ class MeTests(HabitoTestCase):
         self.assertEqual(body["role"], "parent")
         self.assertEqual(body["parent"]["room_code"], parent.room_code)
         self.assertEqual(body["parent"]["timezone"], "Asia/Tashkent")
+
+    def test_parent_sets_child_name(self):
+        parent = create_parent()
+        client = parent_client(parent)
+        response = client.patch(reverse("me"), {"child_name": "  Ali "})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["role"], "parent")
+        self.assertEqual(response.json()["parent"]["child_name"], "Ali")
+        self.assertEqual(client.get(reverse("me")).json()["parent"]["child_name"], "Ali")
+
+    def test_child_name_can_be_cleared(self):
+        parent = create_parent()
+        parent.child_name = "Ali"
+        parent.save()
+        response = parent_client(parent).patch(reverse("me"), {"child_name": ""})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["parent"]["child_name"], "")
+
+    def test_child_name_validation(self):
+        client = parent_client(create_parent())
+        self.assertError(client.patch(reverse("me"), {"child_name": "x" * 41}), 400, "invalid_input")
+        self.assertError(client.patch(reverse("me"), {}), 400, "invalid_input")
+
+    def test_login_returns_child_name(self):
+        parent = create_parent()
+        parent.child_name = "Ali"
+        parent.save()
+        response = self.client.post(reverse("auth-login"), {"email": parent.email, "password": PASSWORD})
+        self.assertEqual(response.json()["parent"]["child_name"], "Ali")
+
+    def test_child_cannot_set_child_name(self):
+        parent = create_parent()
+        response = child_client(join(parent)).patch(reverse("me"), {"child_name": "Ali"})
+        self.assertError(response, 403, "forbidden")
+        parent.refresh_from_db()
+        self.assertEqual(parent.child_name, "")
 
     def test_child(self):
         parent = create_parent()

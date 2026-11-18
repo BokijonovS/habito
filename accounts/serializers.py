@@ -9,7 +9,7 @@ from .models import Child, Parent, ParentDevice, validate_timezone
 class ParentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Parent
-        fields = ["id", "email", "room_code", "timezone", "created_at"]
+        fields = ["id", "email", "room_code", "child_name", "timezone", "created_at"]
         read_only_fields = fields
 
 
@@ -36,6 +36,8 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, min_length=8, max_length=128)
     # Sent silently by the app (TimeZone.current.identifier); decides when a day starts.
     timezone = serializers.CharField(max_length=64, required=False, validators=[validate_timezone])
+    # What the parent calls their child; shown in the app title. Optional.
+    child_name = serializers.CharField(max_length=40, required=False, allow_blank=True)
 
     def validate_email(self, value: str) -> str:
         value = value.strip().lower()
@@ -63,6 +65,10 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Email or password is wrong.")
         attrs["parent"] = parent
         return attrs
+
+
+class MeUpdateSerializer(serializers.Serializer):
+    child_name = serializers.CharField(max_length=40, allow_blank=True)
 
 
 class RefreshSerializer(serializers.Serializer):

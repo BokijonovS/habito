@@ -20,6 +20,7 @@ from .serializers import (
     LoginSerializer,
     LogoutSerializer,
     MeResponseSerializer,
+    MeUpdateSerializer,
     ParentDeviceSerializer,
     ParentSerializer,
     RefreshSerializer,
@@ -140,6 +141,17 @@ class MeView(APIView):
         if user.is_parent:
             return Response({"role": "parent", "parent": ParentSerializer(user).data})
         return Response({"role": "child", "child": ChildSerializer(user).data})
+
+    @extend_schema(request=MeUpdateSerializer, responses={200: MeResponseSerializer}, tags=["auth"])
+    def patch(self, request):
+        """Parent only: change what the app calls the child."""
+        if not request.user.is_parent:
+            raise ApiError("forbidden", "Only a parent can do this.", status.HTTP_403_FORBIDDEN)
+        serializer = MeUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        request.user.child_name = serializer.validated_data["child_name"]
+        request.user.save(update_fields=["child_name"])
+        return Response({"role": "parent", "parent": ParentSerializer(request.user).data})
 
 
 class DeviceView(APIView):

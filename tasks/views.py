@@ -131,9 +131,10 @@ class TodayView(APIView):
 
 
 class TaskDoneView(APIView):
-    """Child: marks today's occurrence done. A mark is final."""
+    """Child: marks today's occurrence done. Parent: takes that mark back."""
 
-    permission_classes = [IsChild]
+    def get_permissions(self):
+        return [IsParent() if self.request.method == "DELETE" else IsChild()]
 
     @extend_schema(request=None, responses={201: CompletionSerializer}, tags=["tasks"])
     def post(self, request, task_id):
@@ -152,6 +153,17 @@ class TaskDoneView(APIView):
         except IntegrityError:
             raise Conflict("already_done", "This task is already marked done today.")
         return Response(CompletionSerializer(completion).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(responses={204: None}, tags=["tasks"])
+    def delete(self, request, task_id):
+        """Undo: removes the done mark of the day the parent sees (today, or the due date)."""
+        task = _task_for(request.user, task_id)
+        tz = request.user.tzinfo
+        day = current_day(task, local_today(tz), tz)
+        removed, _ = Completion.objects.filter(task=task, local_date=day).delete()
+        if not removed:
+            raise Conflict("not_done", "This task is not marked done.")
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 _RANGE_PARAMS = [
@@ -176,13 +188,24 @@ class HistoryView(APIView):
         for c in completions:
             done_by_day.setdefault(c.local_date, []).append(c)
 
+        today = local_today(tz)
         days = []
         day = to_day
         while day >= from_day:
-            due_ids = {t.id for t in tasks if is_due_on(t, day, tz)}
+            due = [t for t in tasks if is_due_on(t, day, tz)]
             done = done_by_day.get(day, [])
+            done_by_task = {c.task_id: c for c in done}
+            # A done task shows the title it was marked with, so a rename does not rewrite the past.
+            entries = [
+                {
+                    "title": done_by_task[t.id].task_title if t.id in done_by_task else t.title,
+                    "status": status_on(t, day, today, t.id in done_by_task),
+                }
+                for t in due
+            ]
+            due_ids = {t.id for t in due}
             # A completion of a since-deleted task still counts as a task that day.
-            extra = sum(1 for c in done if c.task_id not in due_ids)
-            days.append({"date": day, "total": len(due_ids) + extra, "done": len(done)})
+            entries += [{"title": c.task_title, "status": "done"} for c in done if c.task_id not in due_ids]
+            days.append({"date": day, "total": len(entries), "done": len(done), "tasks": entries})
             day -= timedelta(days=1)
         return Response(HistorySerializer({"from_date": from_day, "to_date": to_day, "days": days}).data)

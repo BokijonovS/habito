@@ -38,6 +38,28 @@ class CreateTaskTests(HabitoTestCase):
         self.assertEqual(body["status"], "open")
         self.assertIsNone(body["done_at"])
 
+    def test_description_is_optional_and_empty_by_default(self):
+        with frozen_now(NOON):
+            body = self.client.post(self.url, {"title": "Make the bed", "repeat": "daily"}).json()
+        self.assertEqual(body["description"], "")
+
+    def test_create_with_description(self):
+        with frozen_now(NOON):
+            response = self.client.post(
+                self.url, {"title": "Make the bed", "repeat": "daily", "description": "Straighten the sheets."}
+            )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["description"], "Straighten the sheets.")
+        self.assertEqual(Task.objects.get().description, "Straighten the sheets.")
+
+    def test_description_too_long(self):
+        response = self.client.post(self.url, {"title": "X", "repeat": "daily", "description": "x" * 501})
+        self.assertError(response, 400, "invalid_input")
+        self.assertIn("description", response.json()["error"]["fields"])
+        self.assertEqual(
+            self.client.post(self.url, {"title": "X", "repeat": "daily", "description": "x" * 500}).status_code, 201
+        )
+
     def test_create_once_with_due_date(self):
         with frozen_now(NOON):
             response = self.client.post(self.url, {"title": "Dentist", "repeat": "once", "due_date": "2026-11-20"})
@@ -123,6 +145,25 @@ class EditTaskTests(HabitoTestCase):
         self.assertEqual(response.json()["status"], "open")
         self.task.refresh_from_db()
         self.assertEqual(self.task.repeat, "daily")
+
+    def test_edit_description_only(self):
+        with frozen_now(NOON):
+            response = self.client.patch(self.url, {"description": "Use the blue brush."})
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["description"], "Use the blue brush.")
+        self.assertEqual(response.json()["title"], "Brush teeth")
+        with frozen_now(NOON):
+            response = self.client.patch(self.url, {"description": ""})
+        self.assertEqual(response.json()["description"], "")
+
+    def test_list_and_today_include_description(self):
+        self.task.description = "Two minutes."
+        self.task.save()
+        with frozen_now(NOON):
+            listed = self.client.get(reverse("tasks")).json()
+            today = self.client.get(reverse("today")).json()
+        self.assertEqual(listed[0]["description"], "Two minutes.")
+        self.assertEqual(today["tasks"][0]["description"], "Two minutes.")
 
     def test_daily_to_once_defaults_due_date_to_today(self):
         with frozen_now(NOON):
@@ -284,12 +325,59 @@ class DoneTests(HabitoTestCase):
     def test_daily_not_before_creation_day(self):
         self.assertError(self.done(self.daily, utc(2026, 10, 20)), 409, "not_due_today")
 
-    def test_no_undo(self):
+    def undo(self, task, at, client=None):
+        with frozen_now(at):
+            return (client or parent_client(self.parent)).delete(reverse("task-done", args=[task.id]))
+
+    def test_parent_undo_removes_todays_mark(self):
         self.done(self.daily, utc(2026, 11, 16, 10))
+        response = self.undo(self.daily, utc(2026, 11, 16, 11))
+        self.assertEqual(response.status_code, 204, response.content)
+        self.assertEqual(Completion.objects.count(), 0)
         with frozen_now(utc(2026, 11, 16, 11)):
-            response = self.child.delete(reverse("task-done", args=[self.daily.id]))
-        self.assertError(response, 405, "method_not_allowed")
+            today = parent_client(self.parent).get(reverse("tasks")).json()
+        self.assertEqual([t["status"] for t in today if t["title"] == "Brush teeth"], ["open"])
+
+    def test_child_can_mark_done_again_after_undo(self):
+        self.done(self.daily, utc(2026, 11, 16, 10))
+        self.undo(self.daily, utc(2026, 11, 16, 11))
+        response = self.done(self.daily, utc(2026, 11, 16, 12))
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_undo_only_touches_todays_mark(self):
+        self.done(self.daily, utc(2026, 11, 15, 10))
+        self.done(self.daily, utc(2026, 11, 16, 10))
+        self.assertEqual(self.undo(self.daily, utc(2026, 11, 16, 11)).status_code, 204)
+        self.assertEqual(list(Completion.objects.values_list("local_date", flat=True)), [date(2026, 11, 15)])
+
+    def test_undo_of_a_one_time_task_uses_its_due_date(self):
+        self.done(self.once, utc(2026, 11, 17, 10))
+        response = self.undo(self.once, utc(2026, 11, 18, 10))  # the day after
+        self.assertEqual(response.status_code, 204, response.content)
+        self.assertEqual(Completion.objects.count(), 0)
+
+    def test_undo_when_not_done(self):
+        self.assertError(self.undo(self.daily, utc(2026, 11, 16, 11)), 409, "not_done")
+        self.done(self.daily, utc(2026, 11, 15, 10))  # yesterday's mark does not count
+        self.assertError(self.undo(self.daily, utc(2026, 11, 16, 11)), 409, "not_done")
+
+    def test_child_cannot_undo(self):
+        self.done(self.daily, utc(2026, 11, 16, 10))
+        response = self.undo(self.daily, utc(2026, 11, 16, 11), client=self.child)
+        self.assertError(response, 403, "forbidden")
         self.assertEqual(Completion.objects.count(), 1)
+
+    def test_undo_other_parents_task_404(self):
+        other_parent = create_parent("dad@example.com")
+        other = create_task(other_parent, "Theirs", "daily", created_at=utc(2026, 11, 1))
+        Completion.objects.create(task=other, parent=other_parent, task_title="Theirs", local_date=date(2026, 11, 16), done_at=utc(2026, 11, 16, 10))
+        self.assertError(self.undo(other, utc(2026, 11, 16, 11)), 404, "not_found")
+        self.assertEqual(Completion.objects.count(), 1)
+
+    def test_undo_anonymous(self):
+        from rest_framework.test import APIClient
+
+        self.assertError(self.undo(self.daily, utc(2026, 11, 16, 11), client=APIClient()), 401, "unauthorized")
 
     def test_parent_cannot_mark_done(self):
         with frozen_now(NOON):
@@ -347,13 +435,52 @@ class HistoryTests(HabitoTestCase):
         self.assertEqual(body["from_date"], "2026-11-14")
         self.assertEqual(body["to_date"], "2026-11-16")
         self.assertEqual(
-            body["days"],
+            [{k: d[k] for k in ("date", "total", "done")} for d in body["days"]],
             [
                 {"date": "2026-11-16", "total": 2, "done": 1},
                 {"date": "2026-11-15", "total": 3, "done": 2},
                 {"date": "2026-11-14", "total": 1, "done": 1},
             ],
         )
+
+    def tasks_of(self, body, day):
+        entry = next(d for d in body["days"] if d["date"] == day)
+        return sorted(entry["tasks"], key=lambda t: t["title"])
+
+    def test_each_day_lists_its_tasks_with_status(self):
+        with frozen_now(NOON):
+            body = self.client.get(self.url, {"from": "2026-11-14", "to": "2026-11-16"}).json()
+        self.assertEqual(
+            self.tasks_of(body, "2026-11-16"),
+            [{"title": "Brush teeth", "status": "done"}, {"title": "Make the bed", "status": "open"}],
+        )
+        self.assertEqual(
+            self.tasks_of(body, "2026-11-15"),
+            [
+                {"title": "Brush teeth", "status": "done"},
+                {"title": "Dentist", "status": "missed"},
+                {"title": "Make the bed", "status": "done"},
+            ],
+        )
+        self.assertEqual(self.tasks_of(body, "2026-11-14"), [{"title": "Brush teeth", "status": "done"}])
+
+    def test_upcoming_task_in_range(self):
+        create_task(self.parent, "Recital", "once", due_date=date(2026, 11, 17), created_at=utc(2026, 11, 1))
+        with frozen_now(NOON):
+            body = self.client.get(self.url, {"from": "2026-11-17", "to": "2026-11-17"}).json()
+        self.assertIn({"title": "Recital", "status": "upcoming"}, self.tasks_of(body, "2026-11-17"))
+
+    def test_day_with_no_tasks_has_an_empty_list(self):
+        with frozen_now(NOON):
+            body = self.client.get(self.url, {"from": "2026-10-01", "to": "2026-10-01"}).json()
+        self.assertEqual(body["days"], [{"date": "2026-10-01", "total": 0, "done": 0, "tasks": []}])
+
+    def test_past_days_keep_the_title_they_were_marked_with(self):
+        self.teeth.title = "Brush well"
+        self.teeth.save()
+        with frozen_now(NOON):
+            body = self.client.get(self.url, {"from": "2026-11-14", "to": "2026-11-14"}).json()
+        self.assertEqual(self.tasks_of(body, "2026-11-14"), [{"title": "Brush teeth", "status": "done"}])
 
     def test_default_range_is_last_7_days(self):
         with frozen_now(NOON):
@@ -367,7 +494,10 @@ class HistoryTests(HabitoTestCase):
         self.bed.delete()
         with frozen_now(NOON):
             body = self.client.get(self.url, {"from": "2026-11-15", "to": "2026-11-15"}).json()
-        self.assertEqual(body["days"], [{"date": "2026-11-15", "total": 3, "done": 2}])
+        day = body["days"][0]
+        self.assertEqual((day["date"], day["total"], day["done"]), ("2026-11-15", 3, 2))
+        self.assertIn({"title": "Make the bed", "status": "done"}, day["tasks"])
+        self.assertEqual(len(day["tasks"]), 3)
 
     def test_bad_ranges(self):
         self.assertError(self.client.get(self.url, {"from": "yesterday"}), 400, "invalid_input")

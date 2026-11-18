@@ -78,6 +78,8 @@ class Parent(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(max_length=254, unique=True)
     room_code = models.CharField(max_length=ROOM_CODE_LENGTH, unique=True)
     timezone = models.CharField(max_length=64, default="UTC", validators=[validate_timezone])
+    # What the parent calls their child in the app. Free text, optional, not an identity.
+    child_name = models.CharField(max_length=40, blank=True, default="")
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

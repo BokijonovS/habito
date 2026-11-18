@@ -31,10 +31,10 @@ One parent is one room with one child device. Joining again with the same code r
 
 | Entity | Fields |
 | --- | --- |
-| Parent | id, email (unique, lowercase), password hash, room_code (6 chars, unique, permanent), timezone (IANA, default UTC), created_at |
+| Parent | id, email (unique, lowercase), password hash, room_code (6 chars, unique, permanent), child_name (max 40, optional), timezone (IANA, default UTC), created_at |
 | ParentDevice | id, parent, apns_token (unique), created_at, last_used_at |
 | Child | id, parent (one-to-one), device_token_hash, joined_at |
-| Task | id, parent, title (max 80), repeat (`once` or `daily`), due_date (once only; defaults to the day it was created), created_at |
+| Task | id, parent, title (max 80), description (max 500, optional), repeat (`once` or `daily`), due_date (once only; defaults to the day it was created), created_at |
 | Completion | id, task (null if the task was deleted), parent, task_title (copied), local_date, done_at. Unique per task and day |
 
 All ids are UUIDs, timestamps are ISO 8601 UTC. "Today" is computed in the parent's timezone, which the parent app sends silently at register and login.
@@ -43,44 +43,46 @@ All ids are UUIDs, timestamps are ISO 8601 UTC. "Today" is computed in the paren
 
 - A **daily** task is due every day from the day it was created. It is `open` today until marked, `done` once marked, and `missed` for any past day with no mark.
 - A **one-time** task is due on its `due_date` only: `upcoming` before, `open` on the day, `done` or `missed` after.
-- A done mark is final. There is no undo and no parent confirmation.
+- A done mark needs no parent confirmation. Only the parent can take it back (undo), and only the mark of the day they see: today for a daily task, the due date for a one-time task. The child can then mark it again.
 - Deleting a task keeps its past completions, so history does not change.
 
 ## API endpoints
 
-15 endpoints under `/api/v1`. All but register, login, refresh and join need `Authorization: Bearer <token>`.
+17 endpoints under `/api/v1`. All but register, login, refresh and join need `Authorization: Bearer <token>`.
 
 | Method | Path | Who | What it does |
 | --- | --- | --- | --- |
-| POST | /auth/register | anyone | `{email, password, timezone?}` → parent (with room_code), access, refresh |
+| POST | /auth/register | anyone | `{email, password, timezone?, child_name?}` → parent (with room_code), access, refresh |
 | POST | /auth/login | anyone | `{email, password, timezone?}` → same. 5 tries per email per 15 min |
 | POST | /auth/refresh | refresh token | New access and refresh pair; the old refresh token dies |
 | POST | /auth/logout | parent | `{refresh, apns_token?}`: revokes the refresh token, removes that phone's push token |
 | DELETE | /auth/account | parent | Deletes the parent, phones, child, tasks and completions |
-| GET | /me | parent, child | Who is calling. Parent: email, room_code, timezone. Child: timezone |
+| GET | /me | parent, child | Who is calling. Parent: email, room_code, child_name, timezone. Child: timezone |
+| PATCH | /me | parent | `{child_name}` → the parent. Changes what the app calls the child; an empty string clears it |
 | POST | /devices | parent | `{apns_token}`: this phone receives pushes |
 | POST | /join | anyone | `{code}` → `child_token`. Replaces any previous child device. 10 tries per IP per 15 min |
 | GET | /tasks | parent | All tasks with status and done_at (today for daily, the due date for once) |
-| POST | /tasks | parent | `{title, repeat, due_date?}` → the task |
-| PATCH | /tasks/{task_id} | parent | `{title?, repeat?, due_date?}`: edits the task. Switching to daily clears the due date; switching to once without a date makes it due today. Past completions stay |
+| POST | /tasks | parent | `{title, repeat, due_date?, description?}` → the task |
+| PATCH | /tasks/{task_id} | parent | `{title?, description?, repeat?, due_date?}`: edits the task. Switching to daily clears the due date; switching to once without a date makes it due today. Past completions stay |
 | DELETE | /tasks/{task_id} | parent | Deletes the task; completions stay |
 | GET | /today | parent, child | `{date, tasks: [...]}`, the tasks due today, each `open` or `done` |
 | POST | /tasks/{task_id}/done | child | Marks today's occurrence done, pushes to the parent. 409 if already done or not due today |
-| GET | /history?from=&to= | parent | `{days: [{date, total, done}]}` newest first. Default last 7 days, at most 31 |
+| DELETE | /tasks/{task_id}/done | parent | Undo: removes the done mark of the day the parent sees (today, or the due date). 409 `not_done` if there is none. No push |
+| GET | /history?from=&to= | parent | `{days: [{date, total, done, tasks: [{title, status}]}]}` newest first, each task `done`, `open`, `missed` or `upcoming`. Default last 7 days, at most 31 |
 
 ### Errors
 
-`{ "error": { "code": "...", "message": "..." } }`, with `fields` added on validation errors. Statuses: 400 invalid input, 401 missing or expired token, 403 wrong role, 404 not found or not yours, 409 conflict (`already_done`, `not_due_today`), 429 too many attempts.
+`{ "error": { "code": "...", "message": "..." } }`, with `fields` added on validation errors. Statuses: 400 invalid input, 401 missing or expired token, 403 wrong role, 404 not found or not yours, 409 conflict (`already_done`, `not_due_today`, `not_done`), 429 too many attempts.
 
 ## Security and privacy
 
 - HTTPS only outside development.
 - Passwords at least 8 characters, hashed with Django's default hasher.
 - Child token: 32 random bytes, only the SHA-256 hash stored; revoked when a new device joins or the account is deleted.
-- Child data: none. No name, no email.
+- Child data: none from the child's device. The only thing about the child is `child_name`, free text the parent chose to type, stored on the parent's account.
 - The room code is permanent in v1. Anyone who learns it can join and replace the child device. Acceptable for a family app's first version; a "new code" endpoint can be added later without changing the data model.
 - Push messages carry only the task title.
 
 ## Out of scope for v1
 
-Hourly tasks, pausing tasks, undo, multiple children per parent, rotating the room code, a per-task completed list, password reset by email, any game state on the server.
+Hourly tasks, pausing tasks, multiple children per parent, rotating the room code, a per-task completed list, password reset by email, any game state on the server.

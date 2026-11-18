@@ -12,16 +12,17 @@ class TaskSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Task
-        fields = ["id", "title", "repeat", "due_date", "status", "done_at", "created_at"]
+        fields = ["id", "title", "description", "repeat", "due_date", "status", "done_at", "created_at"]
         read_only_fields = fields
 
 
 class TaskWriteSerializer(serializers.ModelSerializer):
     title = serializers.CharField(max_length=80)
+    description = serializers.CharField(max_length=500, required=False, allow_blank=True)
 
     class Meta:
         model = Task
-        fields = ["title", "repeat", "due_date"]
+        fields = ["title", "description", "repeat", "due_date"]
 
     def validate(self, attrs):
         # On an edit, judge the combination of what is sent and what is stored.
@@ -59,10 +60,16 @@ class CompletionSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class HistoryTaskSerializer(serializers.Serializer):
+    title = serializers.CharField()
+    status = serializers.ChoiceField(choices=["done", "open", "missed", "upcoming"])
+
+
 class HistoryDaySerializer(serializers.Serializer):
     date = serializers.DateField()
     total = serializers.IntegerField()
     done = serializers.IntegerField()
+    tasks = HistoryTaskSerializer(many=True)
 
 
 class HistorySerializer(serializers.Serializer):

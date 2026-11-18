@@ -18,6 +18,7 @@ class Task(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     parent = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tasks")
     title = models.CharField(max_length=80)
+    description = models.CharField(max_length=500, blank=True, default="")
     repeat = models.CharField(max_length=10, choices=Repeat.choices)
     due_date = models.DateField(null=True, blank=True)  # once only; defaults to the day it was created
     created_at = models.DateTimeField(auto_now_add=True)

@@ -70,7 +70,11 @@ class PermissionMatrixTests(HabitoTestCase):
         self.check("anon", "post", url, 401)
         self.check("child", "post", reverse("task-done", args=[self.other_task.id]), 404)
         self.check("child", "post", url, "ok")
-        self.check("child", "delete", url, 405)  # no undo
+        # Undo is the parent's: the child cannot take a mark back.
+        self.check("child", "delete", url, 403)
+        self.check("anon", "delete", url, 401)
+        self.check("parent", "delete", reverse("task-done", args=[self.other_task.id]), 404)
+        self.check("parent", "delete", url, "ok")
 
     def test_history(self):
         self.check("child", "get", reverse("history"), 403)
@@ -81,6 +85,11 @@ class PermissionMatrixTests(HabitoTestCase):
         self.check("anon", "get", reverse("me"), 401)
         self.check("parent", "get", reverse("me"), "ok")
         self.check("child", "get", reverse("me"), "ok")
+
+    def test_me_update(self):
+        self.check("anon", "patch", reverse("me"), 401, {"child_name": "Ali"})
+        self.check("child", "patch", reverse("me"), 403, {"child_name": "Ali"})
+        self.check("parent", "patch", reverse("me"), "ok", {"child_name": "Ali"})
 
     def test_logout_and_delete_account(self):
         self.check("child", "delete", reverse("auth-account"), 403)
