@@ -82,10 +82,12 @@ class LogoutSerializer(serializers.Serializer):
 
 class ChildSerializer(serializers.ModelSerializer):
     timezone = serializers.CharField(source="parent.timezone", read_only=True)
+    # The code the child joined with. The app asks the child to type it again to leave.
+    room_code = serializers.CharField(source="parent.room_code", read_only=True)
 
     class Meta:
         model = Child
-        fields = ["id", "timezone", "joined_at"]
+        fields = ["id", "timezone", "room_code", "joined_at"]
         read_only_fields = fields
 
 

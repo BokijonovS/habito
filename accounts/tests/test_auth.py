@@ -259,6 +259,7 @@ class MeTests(HabitoTestCase):
         body = child_client(join(parent)).get(reverse("me")).json()
         self.assertEqual(body["role"], "child")
         self.assertEqual(body["child"]["timezone"], "Asia/Tashkent")
+        self.assertEqual(body["child"]["room_code"], parent.room_code)
         self.assertNotIn("parent", body)
 
     def test_anonymous_and_bad_token(self):

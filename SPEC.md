@@ -57,7 +57,7 @@ All ids are UUIDs, timestamps are ISO 8601 UTC. "Today" is computed in the paren
 | POST | /auth/refresh | refresh token | New access and refresh pair; the old refresh token dies |
 | POST | /auth/logout | parent | `{refresh, apns_token?}`: revokes the refresh token, removes that phone's push token |
 | DELETE | /auth/account | parent | Deletes the parent, phones, child, tasks and completions |
-| GET | /me | parent, child | Who is calling. Parent: email, room_code, child_name, timezone. Child: timezone |
+| GET | /me | parent, child | Who is calling. Parent: email, room_code, child_name, timezone. Child: timezone, room_code (the app asks for it again before leaving) |
 | PATCH | /me | parent | `{child_name}` → the parent. Changes what the app calls the child; an empty string clears it |
 | POST | /devices | parent | `{apns_token}`: this phone receives pushes |
 | POST | /join | anyone | `{code}` → `child_token`. Replaces any previous child device. 10 tries per IP per 15 min |
